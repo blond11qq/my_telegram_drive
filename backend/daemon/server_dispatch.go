@@ -491,6 +491,20 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 			return ErrorResponse(req.ID, err)
 		}
 		return frame
+	case CommandVaultCreate:
+		var in VaultCreateRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.vaultCreate(ctx, in.Password, in.Hint)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
 	case CommandVaultUnlock:
 		var in VaultUnlockRequest
 		if err := decodePayload(req.Payload, &in); err != nil {

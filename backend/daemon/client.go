@@ -333,6 +333,14 @@ func (c *Client) VaultStatus() (VaultResponse, error) {
 	return out, nil
 }
 
+func (c *Client) VaultCreate(password string, hint string) (VaultResponse, error) {
+	var out VaultResponse
+	if err := c.call(CommandVaultCreate, VaultCreateRequest{Password: password, Hint: hint}, &out); err != nil {
+		return VaultResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) VaultUnlock(password string) (VaultResponse, error) {
 	var out VaultResponse
 	if err := c.call(CommandVaultUnlock, VaultUnlockRequest{Password: password}, &out); err != nil {

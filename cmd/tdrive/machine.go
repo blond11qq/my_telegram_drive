@@ -158,7 +158,7 @@ var machineCommands = []machineCommandSpec{
 	{"vault status", "vault status", nil, false, false},
 	{"vault lock", "vault lock", nil, true, false},
 	{"vault unlock", "vault unlock --password-stdin", []string{"--password-stdin"}, true, false},
-	{"put", "put [--encrypt] <local-file> <absolute-remote-path>", []string{"--encrypt"}, true, true},
+	{"put", "put [--plaintext] <local-file> <absolute-remote-path>", []string{"--plaintext"}, true, true},
 	{"get", "get <absolute-remote-file> <local-file>", []string{"--yes"}, true, true},
 	{"sync", "sync [drive-id]", nil, true, true},
 	{"rebuild", "rebuild [drive-id]", []string{"--yes"}, true, true},
@@ -554,11 +554,11 @@ func machineTransfer(c machineClient, args []string, opts cliOptions) (any, erro
 }
 
 func machinePut(c machineClient, args []string, driveID int64) (any, error) {
-	parsed, err := parseMachineArgs(args, "--encrypt")
+	parsed, err := parseMachineArgs(args, "--plaintext", "--encrypt")
 	if err != nil {
 		return nil, err
 	}
-	if err := requirePositional(parsed, 2, 2, "tdrive put [--encrypt] <local-file> <absolute-remote-path> --drive-id ID --json"); err != nil {
+	if err := requirePositional(parsed, 2, 2, "tdrive put [--plaintext] <local-file> <absolute-remote-path> --drive-id ID --json"); err != nil {
 		return nil, err
 	}
 	if err := requireAbsoluteRemote(parsed.positional[1]); err != nil {
@@ -575,7 +575,8 @@ func machinePut(c machineClient, args []string, driveID int64) (any, error) {
 	if !info.Mode().IsRegular() {
 		return nil, machineInvalid("JSON put supports regular files only")
 	}
-	return c.UploadInDrive(driveID, localPath, parsed.positional[1], parsed.flags["--encrypt"], false, nil)
+	encrypt := !parsed.flags["--plaintext"]
+	return c.UploadInDrive(driveID, localPath, parsed.positional[1], encrypt, false, nil)
 }
 
 func machineGet(c machineClient, args []string, opts cliOptions) (any, error) {

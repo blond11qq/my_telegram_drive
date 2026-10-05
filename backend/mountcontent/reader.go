@@ -23,6 +23,18 @@ import (
 
 const maxConcurrentDocumentResolutions = 4
 
+const (
+	// mountReadAheadBlocks matches the media playback profile: after the
+	// foreground block, this many megabytes stream in behind it, so a video
+	// player parsing headers already has the next seconds buffered instead
+	// of stalling one Telegram round-trip per megabyte.
+	mountReadAheadBlocks = 8
+	// mountBlockCacheBytes is deliberately larger than the media default:
+	// scrubbing back and forth across a movie reuses these blocks instead
+	// of re-fetching them from Telegram.
+	mountBlockCacheBytes = 128 * 1024 * 1024
+)
+
 var (
 	ErrEncryptedUnsupported = errors.New("mount content: encrypted file format is unsupported")
 	ErrKeyUnavailable       = errors.New("mount content: encryption key is unavailable")
@@ -112,8 +124,12 @@ func New(cfg Config) (*Opener, error) {
 		encryptedReaders:    make(map[*Reader]struct{}),
 		reader: media.NewRangeReader(media.RangeReaderConfig{
 			Client:     cfg.Ranges,
-			ReadAhead:  1,
+			ReadAhead:  mountReadAheadBlocks,
 			Background: true,
+			// A bigger private block cache than the media default: video
+			// players scrub back and forth, and re-fetching 1 MiB blocks
+			// from Telegram on every seek is the dominant stall.
+			MaxCacheBytes: mountBlockCacheBytes,
 		}),
 	}, nil
 }

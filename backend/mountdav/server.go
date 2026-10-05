@@ -126,6 +126,7 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 			return Status{}, resumeErr
 		}
 		pendingCreates = newPendingCreateStore(defaultPendingCreateGrace, defaultPendingCreatePoll, nil)
+		filesystem.SetPendingCreates(pendingCreates)
 	}
 	application := &readApplication{
 		capabilityPath: capabilityPath,

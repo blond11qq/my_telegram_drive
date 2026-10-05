@@ -24,9 +24,11 @@ func newTestPendingCreateStore(t *testing.T, grace time.Duration, now func() tim
 func newWritableTestHandlerWithPendingCreates(t *testing.T, writer WriteCoordinator, pendingCreates *pendingCreateStore) http.Handler {
 	t.Helper()
 	locks := newBoundedLockSystem(defaultMaxActiveLocks)
+	fs := testFS(t, nil)
+	fs.SetPendingCreates(pendingCreates)
 	application := &readApplication{
 		capabilityPath: testCapability,
-		fs:             testFS(t, nil),
+		fs:             fs,
 		lockSystem:     locks,
 		writer:         writer,
 		authority:      "127.0.0.1:7331",

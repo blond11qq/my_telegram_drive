@@ -36,6 +36,11 @@ func (application *readApplication) servePut(response http.ResponseWriter, reque
 		writeHTTPError(response, status)
 		return
 	}
+	if application.pendingCreates != nil {
+		if _, pending := application.pendingCreates.lookup(path); pending {
+			conditions = conditionsForDeferredPlaceholder(conditions)
+		}
+	}
 	release, status := application.confirmMutationLocks([]string{path}, &conditions)
 	if status != 0 {
 		if status == http.StatusServiceUnavailable {
@@ -358,8 +363,15 @@ func (application *readApplication) serveDelete(response http.ResponseWriter, re
 		return
 	}
 	defer release()
-	if application.pendingCreates != nil {
-		application.pendingCreates.supersede(path)
+	if application.pendingCreates != nil && application.pendingCreates.supersede(path) {
+		// The deferred empty create never committed, and cancelling it here
+		// fully satisfies the delete. The client already saw a successful
+		// create for this path, so answer 204 instead of letting the
+		// coordinator's not-found turn the cleanup into a 404 (which macOS
+		// Finder surfaces as an operation failure).
+		slog.Debug("mountdav: DELETE cancelled a pending empty create", "path", path)
+		response.WriteHeader(http.StatusNoContent)
+		return
 	}
 	slog.Debug("mountdav: serving DELETE", "path", path)
 	operationID, err := randomOperationID()
@@ -416,6 +428,36 @@ func fakeJunkWriteSuccess(response http.ResponseWriter, request *http.Request, s
 		_, _ = io.Copy(io.Discard, request.Body)
 	}
 	response.WriteHeader(status)
+}
+
+// conditionsForDeferredPlaceholder drops ETag-based preconditions for a PUT
+// whose target is a still-deferred empty create. The only ETag the client can
+// be referencing is the placeholder's synthetic projection ETag (the durable
+// resource has never existed), so the condition is satisfied by construction,
+// while the coordinator -- resolving against the durable projection where the
+// target is still absent -- would otherwise reject the write with 412. Lock
+// tokens and lock enforcement are untouched.
+func conditionsForDeferredPlaceholder(conditions MutationConditions) MutationConditions {
+	conditions.IfMatch = ETagConditions{}
+	conditions.IfNoneMatch = ETagConditions{}
+	if len(conditions.DAVIf) == 0 {
+		return conditions
+	}
+	filtered := make([]DAVConditionList, 0, len(conditions.DAVIf))
+	for _, list := range conditions.DAVIf {
+		kept := make([]DAVCondition, 0, len(list.Conditions))
+		for _, condition := range list.Conditions {
+			if condition.ETag == nil {
+				kept = append(kept, condition)
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		filtered = append(filtered, DAVConditionList{ResourcePath: list.ResourcePath, Conditions: kept})
+	}
+	conditions.DAVIf = filtered
+	return conditions
 }
 
 func (application *readApplication) requestResourcePath(request *http.Request, allowRoot bool) (string, int) {

@@ -128,6 +128,8 @@ func run(args []string) error {
 		return runVaultUnlock(args[1:])
 	case "mount":
 		return runMount(args[1:])
+	case "web":
+		return runWeb(args[1:])
 	case "put":
 		return runPut(args[1:])
 	case "get":
@@ -509,11 +511,13 @@ func runMV(args []string) error {
 
 func runVault(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("missing vault command\n\nRun: tdrive vault status|unlock|lock")
+		return fmt.Errorf("missing vault command\n\nRun: tdrive vault status|create|unlock|lock")
 	}
 	switch args[0] {
 	case "status":
 		return printVaultStatus()
+	case "create":
+		return runVaultCreate(args[1:])
 	case "unlock":
 		return runVaultUnlock(args[1:])
 	case "lock":
@@ -530,6 +534,60 @@ func runVault(args []string) error {
 	default:
 		return fmt.Errorf("unknown vault command %q", args[0])
 	}
+}
+
+func runVaultCreate(args []string) error {
+	hint := ""
+	passwordStdin := false
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--password-stdin":
+			if passwordStdin {
+				return fmt.Errorf("--password-stdin may only be specified once")
+			}
+			passwordStdin = true
+		case "--hint":
+			index++
+			if index >= len(args) {
+				return fmt.Errorf("usage: tdrive vault create [--hint TEXT] [--password-stdin]")
+			}
+			hint = args[index]
+		default:
+			return fmt.Errorf("usage: tdrive vault create [--hint TEXT] [--password-stdin]")
+		}
+	}
+	var password string
+	if passwordStdin {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		password = strings.TrimRight(string(b), "\r\n")
+		if password == "" {
+			return interactionRequired("password stdin was empty")
+		}
+	} else {
+		if cliNonInteractive() {
+			return interactionRequired("vault create requires --password-stdin in non-interactive mode")
+		}
+		fmt.Fprint(os.Stderr, "New vault password: ")
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return err
+		}
+		password = string(b)
+	}
+	c, err := newDaemonClient()
+	if err != nil {
+		return err
+	}
+	out, err := c.WithTimeout(cliCurrentOptions().Timeout).VaultCreate(password, hint)
+	if err != nil {
+		return err
+	}
+	printVault(out.Status)
+	return nil
 }
 
 func printVaultStatus() error {
@@ -563,13 +621,17 @@ func runVaultUnlock(args []string) error {
 }
 
 func runPut(args []string) error {
-	encrypt := false
+	// Uploads are encrypted by default; pass --plaintext to store a file
+	// unencrypted. -e/--encrypt remain accepted for compatibility.
+	encrypt := true
 	extract := false
 	var positional []string
 	for _, arg := range args {
 		switch arg {
 		case "-e", "--encrypt":
 			encrypt = true
+		case "--plaintext", "--no-encrypt":
+			encrypt = false
 		case "--extract":
 			extract = true
 		default:
@@ -577,7 +639,7 @@ func runPut(args []string) error {
 		}
 	}
 	if len(positional) < 1 || len(positional) > 2 {
-		return fmt.Errorf("usage: tdrive put [-e] [--extract] <local> [remote-path]")
+		return fmt.Errorf("usage: tdrive put [--plaintext] [--extract] <local> [remote-path]")
 	}
 	localPath, err := filepath.Abs(positional[0])
 	if err != nil {
@@ -883,9 +945,11 @@ Usage:
   tdrive mount              Start WebDAV mount server
   tdrive mount status       Show mount server status
   tdrive mount stop         Stop mount server
+  tdrive web [--port N]     Serve the drive as a web page (list/stream/upload)
   tdrive vault status       Show vault state
+  tdrive vault create       Set the initial vault password (once)
   tdrive unlock             Unlock the vault in the daemon
-  tdrive put [-e] [--extract] <local> [remote-path]
+  tdrive put [--plaintext] [--extract] <local> [remote-path]
   tdrive get <remote> [local]
   tdrive cat <remote>
   tdrive sync [name|id]

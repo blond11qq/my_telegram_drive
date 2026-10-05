@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"sync"
 	"time"
 )
@@ -108,15 +109,54 @@ func (s *pendingCreateStore) arm(path string, commit func(ctx context.Context)) 
 // supersede cancels any pending empty create for path so it is never
 // committed. Callers use this before any other mutation of the same path
 // proceeds -- a real write, a delete, or a directory create all represent
-// fresher intent than a not-yet-committed empty placeholder.
-func (s *pendingCreateStore) supersede(path string) {
+// fresher intent than a not-yet-committed empty placeholder. Reports whether a
+// pending entry existed, i.e. whether this call is what cancelled it.
+func (s *pendingCreateStore) supersede(path string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.entries[path]; ok {
+	existing, ok := s.entries[path]
+	if ok {
 		existing.superseded = true
 		slog.Debug("mountdav: pending empty create superseded, will never commit", "path", path)
 	}
 	delete(s.entries, path)
+	return ok
+}
+
+// lookup reports whether path currently has a deferred empty create that has
+// neither been committed nor superseded, returning when it was armed.
+func (s *pendingCreateStore) lookup(path string) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[path]
+	if !ok || entry.superseded {
+		return time.Time{}, false
+	}
+	return entry.armedAt, true
+}
+
+// pendingCreateChild identifies one still-deferred empty create for directory
+// listing merges.
+type pendingCreateChild struct {
+	path    string
+	armedAt time.Time
+}
+
+// childrenOf returns the deferred empty creates whose parent directory is dir,
+// so read paths can present them alongside durably committed children.
+func (s *pendingCreateStore) childrenOf(dir string) []pendingCreateChild {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var children []pendingCreateChild
+	for pendingPath, entry := range s.entries {
+		if entry.superseded {
+			continue
+		}
+		if path.Dir(pendingPath) == dir {
+			children = append(children, pendingCreateChild{path: pendingPath, armedAt: entry.armedAt})
+		}
+	}
+	return children
 }
 
 // reapDue commits every pending entry whose grace period has elapsed and

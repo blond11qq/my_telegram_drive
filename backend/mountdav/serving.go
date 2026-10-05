@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"TDrive/backend/mountfs"
@@ -147,7 +148,50 @@ func (application *readApplication) serveFile(response http.ResponseWriter, requ
 		serveFileError(response, err)
 		return
 	}
+	application.warmMediaTail(request.Context(), clean, entry, info)
 	http.ServeContent(response, request, info.Name(), info.ModTime(), file)
+}
+
+// mediaTailWarmExtensions covers containers whose index (moov and friends)
+// players typically fetch from the tail right after probing the head.
+var mediaTailWarmExtensions = map[string]bool{
+	".mp4": true, ".m4v": true, ".mov": true, ".qt": true,
+	".webm": true, ".mkv": true, ".mk3d": true, ".avi": true,
+	".ts": true, ".m2ts": true, ".mts": true, ".flv": true,
+	".wmv": true, ".ogv": true, ".mpeg": true, ".mpg": true,
+	".mp3": true, ".m4a": true, ".aac": true, ".wav": true,
+	".flac": true, ".oga": true, ".ogg": true, ".opus": true,
+}
+
+// mediaTailWarmBytes bounds the background tail fetch. Most container
+// indexes fit; over-fetching only costs background Telegram range reads.
+const mediaTailWarmBytes = 4 * 1024 * 1024
+
+// warmMediaTail prefetches the tail of a media file in the background while
+// ServeContent streams the head the player asked for. Video players almost
+// always jump to the tail next (moov atom), and without this that jump pays
+// full cold Telegram round-trips before the first frame can show.
+func (application *readApplication) warmMediaTail(ctx context.Context, clean string, entry mountfs.Entry, info fileInfo) {
+	size := info.Size()
+	if size <= mediaTailWarmBytes || entry.Kind != mountfs.KindFile {
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(info.entry.Name))
+	if !mediaTailWarmExtensions[ext] {
+		return
+	}
+	warmCtx := context.WithoutCancel(ctx)
+	go func() {
+		warm, err := application.fs.openEntry(warmCtx, clean, entry)
+		if err != nil {
+			return
+		}
+		defer warm.Close()
+		if _, err := warm.Seek(size-mediaTailWarmBytes, io.SeekStart); err != nil {
+			return
+		}
+		_, _ = io.CopyN(io.Discard, warm, mediaTailWarmBytes)
+	}()
 }
 
 func setFileHeaders(ctx context.Context, header http.Header, info fileInfo) error {

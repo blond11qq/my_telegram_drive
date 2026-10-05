@@ -1,0 +1,13 @@
+[Unit]
+Description=TDrive web file browser (list, stream, upload)
+After=tdrive-mount.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/tdrive web --port 8080 --no-auth
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=TDrive vault auto-unlock at login/boot
+After=network-online.target
+Before=tdrive-mount.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'exec %h/.local/bin/tdrive unlock --password-stdin < %h/.config/TDrive/vault.pass'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

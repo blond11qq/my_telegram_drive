@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"strings"
 	"unicode/utf8"
 
@@ -17,11 +18,58 @@ import (
 // FileSystem adapts a protocol-neutral mountfs.FS to x/net/webdav's
 // filesystem contract. Every mutating operation is denied unconditionally.
 type FileSystem struct {
-	fs mountfs.ReadFilesystem
+	fs      mountfs.ReadFilesystem
+	pending *pendingCreateStore
 }
 
 func NewFileSystem(fs mountfs.ReadFilesystem) *FileSystem {
 	return &FileSystem{fs: fs}
+}
+
+// SetPendingCreates wires the deferred empty-create store into the read paths.
+// A deferred create answers its originating PUT with success before the file
+// is durably committed, so for the remainder of the grace window readers must
+// still observe it: without this overlay macOS Finder's immediate PROPFIND
+// after its placeholder PUT sees a 404 and aborts the whole copy with
+// fnfErr (-43). Passing nil disables the overlay (read-only servers).
+func (fs *FileSystem) SetPendingCreates(store *pendingCreateStore) {
+	fs.pending = store
+}
+
+// pendingEntryIDPrefix namespaces synthetic placeholder identities so they can
+// never collide with durable Telegram object IDs.
+const pendingEntryIDPrefix = "pending-create:"
+
+func pendingEntryID(clean string) string {
+	return pendingEntryIDPrefix + clean
+}
+
+func isPendingEntryID(id string) bool {
+	return strings.HasPrefix(id, pendingEntryIDPrefix)
+}
+
+// pendingEntry projects a still-deferred empty create as a zero-byte regular
+// file at clean, honouring the visibility contract of the successful PUT that
+// armed it. Returns false when no pending entry covers the path.
+func (fs *FileSystem) pendingEntry(clean string) (mountfs.Entry, bool) {
+	if fs.pending == nil {
+		return mountfs.Entry{}, false
+	}
+	armedAt, ok := fs.pending.lookup(clean)
+	if !ok {
+		return mountfs.Entry{}, false
+	}
+	name := clean
+	if index := strings.LastIndexByte(clean, '/'); index >= 0 {
+		name = clean[index+1:]
+	}
+	return mountfs.Entry{
+		ID:       pendingEntryID(clean),
+		ParentID: path.Dir(clean),
+		Name:     name,
+		Kind:     mountfs.KindFile,
+		ModTime:  armedAt,
+	}, true
 }
 
 func (*FileSystem) Mkdir(context.Context, string, os.FileMode) error {
@@ -65,14 +113,56 @@ func (fs *FileSystem) lookup(ctx context.Context, operation, name string) (strin
 	}
 	entry, err := fs.fs.Stat(ctx, clean)
 	if err != nil {
+		if pendingEntry, ok := fs.pendingEntry(clean); ok && errors.Is(err, mountfs.ErrNotFound) {
+			return clean, pendingEntry, nil
+		}
 		return "", mountfs.Entry{}, mapMountFSError(operation, clean, err)
 	}
 	return clean, entry, nil
 }
 
+// readDir lists clean's children, merging in any still-deferred empty creates
+// whose parent directory is clean so directory listings match what Stat and
+// GET already report during the grace window.
+func (fs *FileSystem) readDir(ctx context.Context, clean string) ([]mountfs.Entry, error) {
+	children, err := fs.fs.ReadDir(ctx, clean)
+	if err != nil {
+		return children, err
+	}
+	if fs.pending == nil {
+		return children, nil
+	}
+	pending := fs.pending.childrenOf(clean)
+	if len(pending) == 0 {
+		return children, nil
+	}
+	present := make(map[string]struct{}, len(children))
+	for _, child := range children {
+		present[child.Name] = struct{}{}
+	}
+	for _, item := range pending {
+		index := strings.LastIndexByte(item.path, '/')
+		name := item.path
+		if index >= 0 {
+			name = item.path[index+1:]
+		}
+		if _, ok := present[name]; ok {
+			continue
+		}
+		children = append(children, mountfs.Entry{
+			ID:       pendingEntryID(item.path),
+			ParentID: clean,
+			Name:     name,
+			Kind:     mountfs.KindFile,
+			ModTime:  item.armedAt,
+		})
+	}
+	return children, nil
+}
+
 func (fs *FileSystem) openEntry(ctx context.Context, clean string, entry mountfs.Entry) (webdav.File, error) {
 	if entry.Kind == mountfs.KindDirectory {
-		children, err := fs.fs.ReadDir(ctx, clean)
+		children, err := fs.readDir(ctx, clean)
 		if err != nil {
 			return nil, mapMountFSError("readdir", clean, err)
 		}
@@ -84,6 +174,11 @@ func (fs *FileSystem) openEntry(ctx context.Context, clean string, entry mountfs
 	}
 	file, err := fs.fs.Open(ctx, clean)
 	if err != nil {
+		if isPendingEntryID(entry.ID) && errors.Is(err, mountfs.ErrNotFound) {
+			// A deferred create has no committed content yet: serve the
+			// zero-byte placeholder the successful PUT already promised.
+			return newMetadataFile(newFileInfo(entry)), nil
+		}
 		return nil, mapMountFSError("open", clean, err)
 	}
 	return newRandomAccessFile(ctx, file, newFileInfo(entry)), nil

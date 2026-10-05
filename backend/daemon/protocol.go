@@ -18,7 +18,8 @@ var ErrInvalidRequest = errors.New("invalid request")
 //
 // 2: personal-drive setup commands (v1.7.1).
 // 3: request-scoped drive IDs, ping, and machine-readable error codes.
-const ProtocolVersion = 3
+// 4: vault initial-password creation (vault.create).
+const ProtocolVersion = 4
 
 const (
 	CommandPing               = "daemon.ping"
@@ -52,6 +53,7 @@ const (
 	CommandRemove             = "fs.remove"
 	CommandMove               = "fs.move"
 	CommandVaultStatus        = "vault.status"
+	CommandVaultCreate        = "vault.create"
 	CommandVaultUnlock        = "vault.unlock"
 	CommandVaultLock          = "vault.lock"
 	CommandUpload             = "transfer.upload"
@@ -334,6 +336,11 @@ type VaultStatus struct {
 
 type VaultUnlockRequest struct {
 	Password string `json:"password"`
+}
+
+type VaultCreateRequest struct {
+	Password string `json:"password"`
+	Hint     string `json:"hint,omitempty"`
 }
 
 type VaultResponse struct {

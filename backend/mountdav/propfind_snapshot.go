@@ -25,7 +25,7 @@ func preflightPropfind(ctx context.Context, fs *FileSystem, name string, include
 	if !includeChildren || root.Kind != mountfs.KindDirectory {
 		return snapshot, nil
 	}
-	children, err := fs.fs.ReadDir(ctx, clean)
+	children, err := fs.readDir(ctx, clean)
 	if err != nil {
 		return nil, mapMountFSError("propfind", clean, err)
 	}

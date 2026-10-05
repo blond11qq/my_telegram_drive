@@ -20,6 +20,21 @@ func (s *Server) vaultStatus(ctx context.Context) (VaultResponse, error) {
 	}}, nil
 }
 
+func (s *Server) vaultCreate(ctx context.Context, password string, hint string) (VaultResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	release, err := s.acquireMountLifecycle(ctx)
+	if err != nil {
+		return VaultResponse{}, fmt.Errorf("vault create: wait for mount lifecycle: %w", err)
+	}
+	defer release()
+
+	if err := s.engine.EncryptionService().CreatePassword(password, hint); err != nil {
+		return VaultResponse{}, err
+	}
+	return s.vaultStatus(ctx)
+}
+
 func (s *Server) vaultUnlock(ctx context.Context, password string) (VaultResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

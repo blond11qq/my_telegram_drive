@@ -374,8 +374,21 @@ Manage the personal-drive encryption vault.
 
 Commands:
   status  Show vault state
+  create  Set the initial vault password (once; fails if already set)
   unlock  Unlock encrypted files in the daemon
   lock    Forget the in-memory vault key
+`,
+	"vault create": `
+tdrive vault create [--hint TEXT] [--password-stdin]
+
+Set the initial encryption vault password. This works exactly once: if a
+password is already set, use "vault unlock" (or change it in the desktop
+app) instead. Creating the password also unlocks the vault, so encrypted
+uploads work immediately.
+
+Options:
+  --hint TEXT       Optional reminder shown by "vault status"
+  --password-stdin  Read the password from stdin
 `,
 	"vault status": `
 tdrive vault status
@@ -425,6 +438,28 @@ reports the mode actually attached by the operating system.
 Close the TDrive GUI before starting this CLI-owned mount. Keep the daemon
 running until "tdrive mount stop" has completed.
 `,
+	"web": `
+tdrive web [--port N] [--listen ADDR] [--token TOKEN] [--no-auth]
+
+Serve the active drive as a web page on the local network: browse folders,
+stream video/audio with seeks, preview images, PDFs and text, download files,
+upload files, and create/rename/delete entries.
+
+The server binds the Tailscale IPv4 address by default (use --listen to
+override, e.g. --listen 127.0.0.1 for local-only), ensures the WebDAV mount
+is running, and guards every route with a token: open the printed URL, which
+carries ?token=..., and the token is stored for reuse in
+~/.config/TDrive/web.token (or set TDRIVE_WEB_TOKEN).
+
+Pass --no-auth to drop the token gate entirely. The server still binds only
+the address given by --listen, so on the default Tailscale address only
+devices in your tailnet can reach it -- but anyone there gets full
+read/write access, so use it only on a tailnet you fully trust.
+
+Uploads stream from the browser to a server-side temp file and then into the
+drive; downloads and media playback proxy byte ranges through the local
+WebDAV mount, so seeking works without fetching the whole file first.
+`,
 	"mount status": `
 tdrive mount status
 
@@ -436,12 +471,14 @@ tdrive mount stop
 Finish in-flight commits, disconnect the OS drive, then stop the private server.
 `,
 	"put": `
-tdrive put [-e|--encrypt] [--extract] <local> [remote-path]
+tdrive put [--plaintext] [--extract] <local> [remote-path]
 
-Upload a local file, folder, or archive.
+Upload a local file, folder, or archive. File contents are encrypted by
+default; pass --plaintext to store a file unencrypted.
 
 Options:
-  -e, --encrypt  Encrypt file uploads in My Drive
+  --plaintext    Store the upload unencrypted (default is encrypted)
+  -e, --encrypt  Accepted for compatibility; encryption is already the default
   --extract      Extract .zip/.tar/.tar.gz/.tgz archives before upload
 
 Notes:
