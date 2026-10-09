@@ -445,8 +445,9 @@ Serve the active drive as a web page on the local network: browse folders,
 stream video/audio with seeks, preview images, PDFs and text, download files,
 upload files, and create/rename/delete entries.
 
-The server binds the Tailscale IPv4 address by default (use --listen to
-override, e.g. --listen 127.0.0.1 for local-only), ensures the WebDAV mount
+The server binds the Tailscale IPv4 address by default and fails when
+Tailscale IPv4 is unavailable (use --listen to override, e.g.
+--listen 127.0.0.1 for local-only), ensures the WebDAV mount
 is running, and guards every route with a token: open the printed URL, which
 carries ?token=..., and the token is stored for reuse in
 ~/.config/TDrive/web.token (or set TDRIVE_WEB_TOKEN).

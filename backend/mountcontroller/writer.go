@@ -75,6 +75,7 @@ func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, files
 		Peers:          builder.engine,
 		ActorID:        builder.engine.ActorID,
 		ProjectThrough: builder.engine.PrepareHardDeleteProjection,
+		MasterKeys:     masterKeys,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: writable Telegram adapter is unavailable", ErrInvalidConfiguration)

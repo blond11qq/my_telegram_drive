@@ -3,8 +3,11 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+
+	"TDrive/backend/projection"
 )
 
 func (s *Server) vaultStatus(ctx context.Context) (VaultResponse, error) {
@@ -47,7 +50,34 @@ func (s *Server) vaultUnlock(ctx context.Context, password string) (VaultRespons
 	if err := s.engine.EncryptionService().UsePassword(password); err != nil {
 		return VaultResponse{}, err
 	}
+	// Filenames sealed while the vault was locked projected as placeholders;
+	// resolve them now that the key is available. Best-effort: a sweep
+	// failure must never fail the unlock itself.
+	s.resolveLockedNames()
 	return s.vaultStatus(ctx)
+}
+
+// resolveLockedNames replays queued filename envelopes after unlock,
+// restoring real names to rows that synced while the vault was locked.
+func (s *Server) resolveLockedNames() {
+	if s == nil || s.engine == nil {
+		return
+	}
+	enc := s.engine.EncryptionService()
+	files := s.engine.FileService()
+	if enc == nil || files == nil || files.DB == nil {
+		return
+	}
+	resolved, err := projection.ResolveLockedNames(files.DB, func(channelID int64) ([]byte, error) {
+		return enc.MasterKeyForUpload(channelID, true)
+	})
+	if err != nil {
+		slog.Warn("daemon: locked-name sweep failed", "error", err)
+		return
+	}
+	if resolved > 0 {
+		slog.Info("daemon: locked names resolved after unlock", "count", resolved)
+	}
 }
 
 func (s *Server) vaultLock(ctx context.Context) (VaultResponse, error) {

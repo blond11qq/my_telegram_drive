@@ -52,6 +52,7 @@ func (r *Resolver) Resolve(ctx context.Context, channelID, fileID int64) (Logica
 			msgID = fileID
 		}
 		out.Segments = []Segment{{MsgID: msgID, Size: row.size}}
+		r.applyProxy(ctx, &out)
 		return out, nil
 	}
 
@@ -71,6 +72,7 @@ func (r *Resolver) Resolve(ctx context.Context, channelID, fileID int64) (Logica
 	for _, p := range parts {
 		out.Segments = append(out.Segments, Segment{MsgID: p.MsgID, Size: p.Size})
 	}
+	r.applyProxy(ctx, &out)
 	return out, nil
 }
 

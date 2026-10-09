@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -49,6 +50,10 @@ type TelegramRemoteConfig struct {
 	// under the sync engine's per-channel lock. Production wiring supplies it
 	// so hard-delete subtree capture observes earlier writes from other clients.
 	ProjectThrough func(context.Context, int64) error
+	// MasterKeys lends the vault key for sealing destination names on
+	// encrypted drives. Required exactly when the drive is encrypted;
+	// without it commits would leak plaintext names and are refused.
+	MasterKeys MasterKeyProvider
 }
 
 type TelegramRemote struct {
@@ -63,6 +68,7 @@ type TelegramRemote struct {
 	historyPages    int
 	floodWaitRetry  tgclient.FloodWaitRetryPolicy
 	projectThrough  func(context.Context, int64) error
+	masterKeys      MasterKeyProvider
 }
 
 func NewTelegramRemote(config TelegramRemoteConfig) (*TelegramRemote, error) {
@@ -99,6 +105,7 @@ func NewTelegramRemote(config TelegramRemoteConfig) (*TelegramRemote, error) {
 		historyPages:    config.HistoryPages,
 		floodWaitRetry:  config.FloodWaitRetry,
 		projectThrough:  config.ProjectThrough,
+		masterKeys:      config.MasterKeys,
 	}, nil
 }
 
@@ -200,6 +207,10 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 		slog.Warn("mountadapter: Commit failed to build projection operation", "operation_id", request.OperationID, "error", err)
 		return mountwrite.MutationResult{}, err
 	}
+	if err := remote.sealOperationName(request.Mutation.DriveID, &op); err != nil {
+		slog.Warn("mountadapter: Commit failed to seal name", "operation_id", request.OperationID, "error", err)
+		return mountwrite.MutationResult{}, err
+	}
 	peer, err := remote.peers.ResolvePeer(ctx, request.Mutation.DriveID)
 	if err != nil {
 		slog.Warn("mountadapter: Commit failed to resolve peer", "operation_id", request.OperationID, "error", err)
@@ -275,6 +286,32 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 	}
 	slog.Debug("mountadapter: Commit applied", "operation_id", request.OperationID, "msg_id", msgID, "object_id", result.ObjectID, "revision", result.Revision, "created", result.Created)
 	return result, nil
+}
+
+// sealOperationName hides the destination name for name-bearing commits on
+// encrypted drives, before the header is formatted and sent. Plaintext
+// drives and nameless ops pass through untouched. Fail closed: an encrypted
+// drive without a key provider refuses the commit rather than leaking the
+// name on the wire.
+func (remote *TelegramRemote) sealOperationName(driveID int64, op *projection.Op) error {
+	switch op.Type {
+	case projection.OpFileCommit, projection.OpFolderCommit, projection.OpRelocate:
+	default:
+		return nil
+	}
+	if op.Name == "" || !projection.DriveEncrypted(remote.db, driveID) {
+		return nil
+	}
+	if remote.masterKeys == nil {
+		return fmt.Errorf("%w: encrypted drive needs a master key to commit", mountwrite.ErrForbidden)
+	}
+	key, err := remote.masterKeys.Key()
+	if err != nil {
+		clear(key)
+		return err
+	}
+	defer clear(key)
+	return projection.SealOpName(op, op.Name, key)
 }
 
 func (remote *TelegramRemote) projectCommitted(

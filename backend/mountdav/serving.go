@@ -11,6 +11,8 @@ import (
 
 	"TDrive/backend/mountfs"
 
+	"TDrive/backend/media"
+
 	"golang.org/x/net/webdav"
 )
 
@@ -120,7 +122,14 @@ func cloneRequestWithTrailingPathSlash(request *http.Request) *http.Request {
 
 func (application *readApplication) serveFile(response http.ResponseWriter, request *http.Request) {
 	name := strings.TrimPrefix(request.URL.Path, application.capabilityPath)
-	clean, entry, err := application.fs.lookup(request.Context(), "open", name)
+	// ?original=1 asks for the pristine original bytes even when a streaming
+	// proxy is ready. The web layer sets it for ?download=1 so downloads
+	// never silently substitute the transcoded derivative.
+	serveCtx := request.Context()
+	if request.URL.Query().Get("original") == "1" {
+		serveCtx = media.WithOriginalOnly(serveCtx)
+	}
+	clean, entry, err := application.fs.lookup(serveCtx, "open", name)
 	if err != nil {
 		serveFileError(response, err)
 		return
@@ -131,24 +140,32 @@ func (application *readApplication) serveFile(response http.ResponseWriter, requ
 		return
 	}
 	if request.Method == http.MethodHead {
-		if err := setFileHeaders(request.Context(), response.Header(), info); err != nil {
+		if err := setFileHeaders(serveCtx, response.Header(), info); err != nil {
 			serveFileError(response, err)
 			return
 		}
 		http.ServeContent(response, request, info.Name(), info.ModTime(), &metadataReadSeeker{size: info.Size()})
 		return
 	}
-	file, err := application.fs.openEntry(request.Context(), clean, entry)
+	file, err := application.fs.openEntry(serveCtx, clean, entry)
 	if err != nil {
 		serveFileError(response, err)
 		return
 	}
 	defer file.Close()
-	if err := setFileHeaders(request.Context(), response.Header(), info); err != nil {
+	// The opened content carries proxy-aware metadata (size, MP4 name and
+	// type, distinct ETag) when it is the transcoded derivative; headers
+	// must match the bytes ServeContent is about to stream.
+	if stat, statErr := file.Stat(); statErr == nil {
+		if proxyInfo, ok := stat.(fileInfo); ok {
+			info = proxyInfo
+		}
+	}
+	if err := setFileHeaders(serveCtx, response.Header(), info); err != nil {
 		serveFileError(response, err)
 		return
 	}
-	application.warmMediaTail(request.Context(), clean, entry, info)
+	application.warmMediaTail(serveCtx, clean, entry, info)
 	http.ServeContent(response, request, info.Name(), info.ModTime(), file)
 }
 
@@ -164,8 +181,9 @@ var mediaTailWarmExtensions = map[string]bool{
 }
 
 // mediaTailWarmBytes bounds the background tail fetch. Most container
-// indexes fit; over-fetching only costs background Telegram range reads.
-const mediaTailWarmBytes = 4 * 1024 * 1024
+// indexes fit, but moov-at-end files can exceed 4 MiB; over-fetching only
+// costs background Telegram range reads.
+const mediaTailWarmBytes = 16 * 1024 * 1024
 
 // warmMediaTail prefetches the tail of a media file in the background while
 // ServeContent streams the head the player asked for. Video players almost

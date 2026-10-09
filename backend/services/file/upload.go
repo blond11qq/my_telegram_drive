@@ -394,9 +394,19 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		op.Encrypted = true
 		op.PlaintextSize = plaintextSize
 		op.EncryptionVersion = 1
+		if err := projection.SealOpName(&op, filename, masterKey); err != nil {
+			return Metadata{}, projection.Op{}, "", err
+		}
+	}
+	// The Telegram attachment and caption tail show the same name the
+	// channel view sees: the real name on plaintext drives, an opaque
+	// upload-derived name when encrypted.
+	attachmentName := filename
+	if encrypted {
+		attachmentName = opaqueAttachmentName(projection.NewUploadUUID(), 0, 1)
 	}
 	header := projection.Format(op)
-	caption := header + "\nTDrive: " + filename
+	caption := header + "\nTDrive: " + attachmentName
 
 	s.warnf("Starting upload: %s\n", filename)
 
@@ -465,10 +475,10 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 			result, serr = thumbSender.SendFileWithThumbnail(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID, documentThumb)
 		} else if idempotentSend {
 			result, serr = tgclient.SendFileIdempotent(
-				ctx, s.TG, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID,
+				ctx, s.TG, peer, uploadSource, attachmentName, caption, uploadSize, onProgress, sendRandomID,
 			)
 		} else {
-			result, serr = s.TG.SendFile(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress)
+			result, serr = s.TG.SendFile(ctx, peer, uploadSource, attachmentName, caption, uploadSize, onProgress)
 		}
 		return serr
 	})
@@ -677,7 +687,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 				s.TG,
 				peer,
 				io.LimitReader(partReader, partLen),
-				partAttachmentName(filename, i, numParts),
+				partAttachmentNameFor(filename, encrypt, uploadUUID, i, numParts),
 				partCaption,
 				partLen,
 				onProgress,
@@ -726,6 +736,10 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		manifestOp.Encrypted = true
 		manifestOp.PlaintextSize = plaintextSize
 		manifestOp.EncryptionVersion = 1
+		if err := projection.SealOpName(&manifestOp, filename, masterKey); err != nil {
+			abort()
+			return Metadata{}, projection.Op{}, "", err
+		}
 	}
 	committedMeta := func(msgID int64) Metadata {
 		return Metadata{

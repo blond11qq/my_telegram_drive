@@ -39,6 +39,9 @@ type webDaemonClient interface {
 	ListDrives() (daemon.DriveListResponse, error)
 	DownloadInDrive(driveID int64, remotePath string, localPath string, onEvent daemon.EventHandler) (daemon.DownloadResponse, error)
 	UploadInDrive(driveID int64, localPath string, remotePath string, encrypt bool, extract bool, onEvent daemon.EventHandler) (daemon.UploadResponse, error)
+	ProxyTranscodeInDrive(driveID int64, remotePath string) (daemon.ProxyTranscodeResponse, error)
+	ProxyStatusInDrive(driveID int64, remotePath string) (daemon.ProxyStatusResponse, error)
+	ProxyHLSInDrive(driveID int64, remotePath string, file string) (daemon.ProxyHLSResponse, error)
 }
 
 type webOptions struct {
@@ -56,6 +59,12 @@ type webServer struct {
 
 	tokenMu sync.RWMutex
 	token   string
+
+	// proxyEnabled gates manual streaming-proxy transcodes. It defaults
+	// to off; GET/POST /api/settings/proxy reads and flips it following
+	// the token-rotate handler pattern.
+	proxyMu      sync.RWMutex
+	proxyEnabled bool
 
 	uploadMu   sync.Mutex
 	uploadJobs map[string]*webUploadJob
@@ -134,6 +143,7 @@ func runWeb(args []string) error {
 	}
 	cleanupWebUploadTemps()
 	server.ensureUploadWorker()
+	server.setProxyEnabled(loadWebProxyEnabled())
 	httpServer := &http.Server{
 		Addr:              listenAddr,
 		Handler:           server.routes(),
@@ -317,7 +327,7 @@ func resolveWebListen(flag string, port int) (string, error) {
 	if ip := tailscaleIPv4(); ip != "" {
 		return net.JoinHostPort(ip, strconv.Itoa(port)), nil
 	}
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), nil
+	return "", fmt.Errorf("web: tailscale IPv4 not available (is tailscale up?)")
 }
 
 func tailscaleIPv4() string {
@@ -353,6 +363,10 @@ func (s *webServer) routes() http.Handler {
 	mux.HandleFunc("/api/cp", s.handleCopy)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/settings/token", s.handleTokenRotate)
+	mux.HandleFunc("/api/settings/proxy", s.handleProxySettings)
+	mux.HandleFunc("/api/proxy/transcode", s.handleProxyTranscode)
+	mux.HandleFunc("/api/proxy/status", s.handleProxyStatus)
+	mux.HandleFunc("/proxy-hls", s.handleProxyHLS)
 	mux.HandleFunc("/api/upload", s.handleUpload)
 	mux.HandleFunc("/api/upload/status", s.handleUploadStatus)
 	mux.HandleFunc("/file", s.handleFile)
@@ -998,6 +1012,48 @@ func cleanupWebUploadTemps() {
 	}
 }
 
+// webFileProxyClient proxies /file bytes through the loopback WebDAV mount.
+// It keeps DefaultTransport's dialer/proxy behavior but tunes connection
+// reuse and failure detection for sequential Range streaming: enough idle
+// loopback conns for the player's head/tail probes plus read-ahead, and a
+// response-header timeout so a stalled upstream fails fast instead of
+// hanging the browser's video element.
+var webFileProxyClient = func() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 32
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{Transport: transport}
+}()
+
+// webFileProxyCopyBufferSize is the streaming copy buffer: 1 MiB matches
+// Telegram's upload.getFile maximum, so one upstream read fills one buffer.
+const webFileProxyCopyBufferSize = 1 << 20
+
+// copyWebFileBody streams the upstream body with a 1 MiB buffer and
+// FlushInterval -1 semantics: each chunk is flushed immediately (like
+// http.ServeContent driving a Flusher) so the browser's player sees bytes as
+// they arrive instead of waiting for a buffered copy to finish.
+func copyWebFileBody(response http.ResponseWriter, body io.Reader) {
+	flusher, canFlush := response.(http.Flusher)
+	buf := make([]byte, webFileProxyCopyBufferSize)
+	for {
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			if _, writeErr := response.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
 // handleFile proxies file bytes through the loopback WebDAV mount so Range
 // requests stream with seeks instead of downloading the whole file first.
 func (s *webServer) handleFile(response http.ResponseWriter, request *http.Request) {
@@ -1016,6 +1072,12 @@ func (s *webServer) handleFile(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	upstream := "http://" + hostPort + prefix + escapeWebDAVPath(remotePath)
+	if request.URL.Query().Get("download") == "1" {
+		// Downloads always serve the pristine original: the mount
+		// substitutes the transcoded proxy only for streaming, and this
+		// flag opts back out of that substitution.
+		upstream += "?original=1"
+	}
 	proxy, err := http.NewRequestWithContext(request.Context(), request.Method, upstream, nil)
 	if err != nil {
 		writeWebError(response, http.StatusInternalServerError, err.Error())
@@ -1027,7 +1089,7 @@ func (s *webServer) handleFile(response http.ResponseWriter, request *http.Reque
 			proxy.Header.Set(header, value)
 		}
 	}
-	upstreamResponse, err := http.DefaultClient.Do(proxy)
+	upstreamResponse, err := webFileProxyClient.Do(proxy)
 	if err != nil {
 		writeWebError(response, http.StatusBadGateway, err.Error())
 		return
@@ -1040,7 +1102,7 @@ func (s *webServer) handleFile(response http.ResponseWriter, request *http.Reque
 		// wait briefly for the mount to catch up instead of failing.
 		if s.waitForMountCatchUp(request.Context(), remotePath) {
 			_ = upstreamResponse.Body.Close()
-			retry, retryErr := http.DefaultClient.Do(proxy.Clone(request.Context()))
+			retry, retryErr := webFileProxyClient.Do(proxy.Clone(request.Context()))
 			if retryErr != nil {
 				writeWebError(response, http.StatusBadGateway, retryErr.Error())
 				return
@@ -1059,7 +1121,7 @@ func (s *webServer) handleFile(response http.ResponseWriter, request *http.Reque
 	}
 	response.WriteHeader(upstreamResponse.StatusCode)
 	if request.Method != http.MethodHead {
-		_, _ = io.Copy(response, upstreamResponse.Body)
+		copyWebFileBody(response, upstreamResponse.Body)
 	}
 }
 
@@ -1096,7 +1158,7 @@ func (s *webServer) waitForMountCatchUp(ctx context.Context, remotePath string) 
 			return false
 		}
 		head.Host = hostPort
-		headResponse, err := http.DefaultClient.Do(head)
+		headResponse, err := webFileProxyClient.Do(head)
 		if err == nil {
 			_ = headResponse.Body.Close()
 			if headResponse.StatusCode != http.StatusNotFound {

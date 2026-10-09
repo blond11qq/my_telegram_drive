@@ -29,6 +29,7 @@ var cacheTempPrefixes = [...]string{
 	".tdrive-upload-part-",
 	"tdrive-enc-",
 	"tdrive-mountdav-put-",
+	"tdrive-proxy-",
 }
 
 var (
@@ -85,9 +86,11 @@ func CreateCacheTemp(pattern string) (*os.File, error) {
 	return os.CreateTemp(dir, pattern)
 }
 
-// CleanupCacheTemps removes app-owned scratch files left by an interrupted
-// upload, encryption, rendition, or mount write. It only examines the cache
-// root and only removes names produced by CreateCacheTemp callers.
+// CleanupCacheTemps removes app-owned scratch left by an interrupted
+// upload, encryption, rendition, mount write, or proxy transcode. It only
+// examines the cache root and only removes names produced by CreateCacheTemp
+// callers and temp work dirs carrying an owned prefix (the proxy worker
+// stages multi-file scratch in tdrive-proxy-* directories).
 //
 // A file it cannot delete is left where it is. Windows refuses to unlink a
 // file another process still has open, and on that platform a second copy of
@@ -105,10 +108,17 @@ func CleanupCacheTemps() error {
 		return fmt.Errorf("datadir: read cache temp directory: %w", err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !isOwnedCacheTemp(entry.Name()) {
+		if !isOwnedCacheTemp(entry.Name()) {
 			continue
 		}
-		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !os.IsNotExist(err) {
+		target := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			if err := os.RemoveAll(target); err != nil && !os.IsNotExist(err) {
+				slog.Debug("datadir: cache temp dir left in place", "name", entry.Name(), "error", err)
+			}
+			continue
+		}
+		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 			slog.Debug("datadir: cache temp left in place", "name", entry.Name(), "error", err)
 		}
 	}

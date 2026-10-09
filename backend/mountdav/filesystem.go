@@ -181,7 +181,11 @@ func (fs *FileSystem) openEntry(ctx context.Context, clean string, entry mountfs
 		}
 		return nil, mapMountFSError("open", clean, err)
 	}
-	return newRandomAccessFile(ctx, file, newFileInfo(entry)), nil
+	info := newFileInfo(entry)
+	if size, ok := file.ProxyPlaybackSize(); ok {
+		info = info.asProxy(size)
+	}
+	return newRandomAccessFile(ctx, file, info), nil
 }
 
 func readOnlyFlags(flag int) bool {

@@ -88,7 +88,12 @@ func serveTestFile(t *testing.T, application *readApplication, target string) *h
 // GET of a media file kicks off a background fetch of its tail (where players
 // look for the moov atom next), so the follow-up tail read hits warm blocks.
 func TestServeFileWarmsMediaTail(t *testing.T) {
-	const size = 5 * 1024 * 1024
+	// Fixture must stay above the tail-warm threshold, or the "tail read"
+	// assertion below would pass without any background fetch happening.
+	const size = 20 * 1024 * 1024
+	if size <= mediaTailWarmBytes {
+		t.Fatalf("fixture size %d must exceed tail-warm threshold %d", size, mediaTailWarmBytes)
+	}
 	application, content := testTailWarmFS(t, "movie.mp4", size)
 	recorder := serveTestFile(t, application, "/movie.mp4")
 	if recorder.Code != http.StatusPartialContent {
@@ -110,7 +115,13 @@ func TestServeFileWarmsMediaTail(t *testing.T) {
 // TestServeFileSkipsTailWarmForDocuments ensures the extra background fetch
 // only runs for media containers, not for every large download.
 func TestServeFileSkipsTailWarmForDocuments(t *testing.T) {
-	const size = 5 * 1024 * 1024
+	// Same oversized fixture as the media case: with a file below the
+	// threshold, "no tail read" would hold because warming never runs, which
+	// would make this test vacuously true.
+	const size = 20 * 1024 * 1024
+	if size <= mediaTailWarmBytes {
+		t.Fatalf("fixture size %d must exceed tail-warm threshold %d", size, mediaTailWarmBytes)
+	}
 	application, content := testTailWarmFS(t, "notes.txt", size)
 	recorder := serveTestFile(t, application, "/notes.txt")
 	if recorder.Code != http.StatusPartialContent {

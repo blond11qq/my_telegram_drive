@@ -25,7 +25,7 @@ const (
 	// defaultBackgroundSlots bounds speculative fetches for a reader that asks
 	// for no read-ahead window of its own, such as the thumbnail and mount
 	// readers whose every fetch is background work.
-	defaultBackgroundSlots = 4
+	defaultBackgroundSlots = 8
 
 	// openingChunkBytes bounds the first foreground read of a file.
 	//
@@ -34,8 +34,10 @@ const (
 	// most of a video's startup delay is spent waiting for the rest of that
 	// block. Serving a short prefix first cuts the wait, and the full block is
 	// filled behind it so later reads still hit the cache. Stays 4 KB-aligned,
-	// which upload.getFile requires.
-	openingChunkBytes int64 = 256 * 1024
+	// which upload.getFile requires, and stays strictly inside the first
+	// block: tests read at openingChunkBytes to mean "past the opening window
+	// but still in block 0".
+	openingChunkBytes int64 = 512 * 1024
 )
 
 // defaultRangeRetryPolicy tunes the shared tgclient retry policy for playback:
@@ -479,9 +481,9 @@ func (r *RangeReader) span(ctx context.Context, ref tgclient.DocumentRef, absolu
 		data, err := r.fetch(ctx, ref, openingKey(ref), 0, int(openingChunkBytes))
 		if err == nil {
 			// The full block follows behind so the next read is warm. It
-			// re-transfers the prefix, which is a deliberate trade: 256 KB of
-			// duplicate background traffic against roughly a four-fold cut in
-			// how long a video takes to start.
+			// re-transfers the prefix, which is a deliberate trade: 512 KiB of
+			// duplicate background traffic against roughly halving how long a
+			// video takes to start.
 			r.prefetch(ref, 0, false)
 			return data, 0, nil
 		}

@@ -59,10 +59,10 @@ type MediaStats struct {
 // playbackReadAhead is how many 1 MiB blocks stay in flight beyond the block
 // the player is reading. Throughput is blocks in flight divided by Telegram's
 // per-request latency, so this and the connection pool are what set the
-// ceiling: eight blocks cover a second of a high-bitrate remux on a slow link
-// while staying well inside the block cache.
+// ceiling: sixteen blocks cover a couple seconds of a high-bitrate remux on
+// a slow link while staying well inside the block cache.
 const (
-	playbackReadAhead    = 8
+	playbackReadAhead    = 16
 	imageRangeCacheBytes = 8 * 1024 * 1024
 )
 

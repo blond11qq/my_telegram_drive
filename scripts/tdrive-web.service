@@ -1,12 +1,19 @@
 [Unit]
 Description=TDrive web file browser (list, stream, upload)
-After=tdrive-mount.service network-online.target
+# tailscaled is a system unit; user units can still order after it so we don't
+# race Tailscale at boot. network-online alone doesn't guarantee `tailscale ip`
+# is ready, so ExecStartPre below waits for it explicitly.
+After=tdrive-mount.service network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
 Type=simple
+# Wait up to ~60s for Tailscale at boot (same IP is reused across reboots;
+# MagicDNS xo-l.tailb73881.ts.net always points at it). If Tailscale is still
+# down, let `tdrive web` fail with a clear error and Restart=always retries.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 0'
 ExecStart=%h/.local/bin/tdrive web --port 8080 --no-auth
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

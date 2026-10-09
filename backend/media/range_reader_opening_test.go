@@ -50,6 +50,21 @@ func TestRangeReaderServesOpeningPrefixBeforeFullBlock(t *testing.T) {
 	}
 }
 
+// The opening prefix must stay strictly inside the first 1 MiB block.
+// Window, seek, and tail tests read at openingChunkBytes to mean "past the
+// opening window but still in block 0", and a prefix equal to a whole block
+// would duplicate that block under a second cache key instead of cutting
+// startup latency.
+func TestOpeningChunkStaysWithinFirstBlock(t *testing.T) {
+	block := int64(tgclient.RangeReadMaxBytes)
+	if openingChunkBytes <= 0 || openingChunkBytes >= block {
+		t.Fatalf("openingChunkBytes = %d, want in (0, %d)", openingChunkBytes, block)
+	}
+	if openingChunkBytes%int64(tgclient.RangeReadAlignment) != 0 {
+		t.Fatalf("openingChunkBytes = %d, want %d-byte alignment", openingChunkBytes, tgclient.RangeReadAlignment)
+	}
+}
+
 // A file smaller than the opening window is already a single short block, so
 // splitting it would only add a request.
 func TestRangeReaderSkipsOpeningPrefixForSmallFiles(t *testing.T) {

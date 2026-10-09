@@ -37,10 +37,16 @@ func (adapter contentAdapter) OpenContent(ctx context.Context, channelID int64, 
 		return nil, mapContentOpenError(err)
 	}
 	if reader.Size() != entry.Size {
-		slog.Error("mountcontroller: content size mismatch, refusing to serve", "channel_id", channelID, "message_id", messageID,
-			"expected_size", entry.Size, "actual_size", reader.Size())
-		_ = reader.Close()
-		return nil, fmt.Errorf("%w: projected content size does not match the resolved body", mountfs.ErrContentUnavailable)
+		// A ready streaming proxy legitimately changes the served size: the
+		// projected entry still describes the original. Accept the reader
+		// only when the proxy store confirms this exact size for the file;
+		// anything else is the same skew this guard always refused.
+		if proxySize, ok := adapter.opener.ProxyPlaintextSize(ctx, channelID, messageID); !ok || reader.Size() != proxySize {
+			slog.Error("mountcontroller: content size mismatch, refusing to serve", "channel_id", channelID, "message_id", messageID,
+				"expected_size", entry.Size, "actual_size", reader.Size())
+			_ = reader.Close()
+			return nil, fmt.Errorf("%w: projected content size does not match the resolved body", mountfs.ErrContentUnavailable)
+		}
 	}
 	return reader, nil
 }

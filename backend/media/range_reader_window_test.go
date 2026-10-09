@@ -164,34 +164,34 @@ func TestRangeReaderKeepsWindowOfBlocksInFlight(t *testing.T) {
 // fetches, so the new position is not queued behind a position the player
 // has left.
 func TestRangeReaderSeekCancelsStaleReadAhead(t *testing.T) {
-	const window = 4
+	const window = 8
 	block := int64(tgclient.RangeReadMaxBytes)
-	data := testBytes(int(block) * 12)
+	data := testBytes(int(block) * 20)
 	fake := newGatedRangeFake(data)
 	reader := NewRangeReader(RangeReaderConfig{Client: fake, ReadAhead: window})
 	defer reader.Close()
 	ref := fake.ref()
 
-	// Reading block 0 opens the window: blocks 1 to 4 start behind it and
+	// Reading block 0 opens the window: blocks 1 to 8 start behind it and
 	// fill every lane slot.
 	fake.release(0)
 	if _, err := reader.ReadStoredAt(context.Background(), ref, make([]byte, 64), openingChunkBytes); err != nil {
 		t.Fatalf("read block 0: %v", err)
 	}
-	fake.awaitEntered(t, block, 2*block, 3*block, 4*block)
+	fake.awaitEntered(t, block, 2*block, 3*block, 4*block, 5*block, 6*block, 7*block, 8*block)
 
-	// Jumping to block 6 wants a fresh window of four, which the stale
+	// Jumping to block 10 wants a fresh window of eight, which the stale
 	// fetches must give up.
-	fake.release(6 * block)
-	if _, err := reader.ReadStoredAt(context.Background(), ref, make([]byte, 64), 6*block+64); err != nil {
-		t.Fatalf("read block 6: %v", err)
+	fake.release(10 * block)
+	if _, err := reader.ReadStoredAt(context.Background(), ref, make([]byte, 64), 10*block+64); err != nil {
+		t.Fatalf("read block 10: %v", err)
 	}
-	for _, offset := range []int64{block, 2 * block, 3 * block, 4 * block} {
+	for _, offset := range []int64{block, 2 * block, 3 * block, 4 * block, 5 * block, 6 * block, 7 * block, 8 * block} {
 		if err := fake.awaitOutcome(t, offset); !errors.Is(err, context.Canceled) {
 			t.Fatalf("stale fetch at %d ended with %v, want cancellation", offset, err)
 		}
 	}
-	fake.awaitEntered(t, 7*block, 8*block, 9*block, 10*block)
+	fake.awaitEntered(t, 11*block, 12*block, 13*block, 14*block, 15*block, 16*block, 17*block, 18*block)
 }
 
 // Read-ahead the player has left behind is kept when nothing needs its

@@ -158,6 +158,37 @@ func TestCleanupCacheTempsRemovesOnlyOwnedScratchFiles(t *testing.T) {
 	}
 }
 
+func TestCleanupCacheTempsRemovesProxyWorkDirs(t *testing.T) {
+	clearOverride(t)
+	base := t.TempDir()
+	SetCache(base)
+	cacheDir, err := CacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An interrupted transcode leaves a work dir with staged files inside.
+	orphan := filepath.Join(cacheDir, "tdrive-proxy-123")
+	if err := os.MkdirAll(orphan, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(orphan, "source"), []byte("staged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cacheDir, "keep.dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CleanupCacheTemps(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("proxy work dir remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "keep.dir")); err != nil {
+		t.Fatalf("unrelated dir removed: %v", err)
+	}
+}
+
 // A scratch file that cannot be deleted is not a reason to refuse to start.
 // Windows will not unlink a file another process has open, so a second copy
 // of the app -- or, in CI, a test running beside this one -- was enough to

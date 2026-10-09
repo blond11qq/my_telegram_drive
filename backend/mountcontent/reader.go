@@ -28,7 +28,7 @@ const (
 	// foreground block, this many megabytes stream in behind it, so a video
 	// player parsing headers already has the next seconds buffered instead
 	// of stalling one Telegram round-trip per megabyte.
-	mountReadAheadBlocks = 8
+	mountReadAheadBlocks = 16
 	// mountBlockCacheBytes is deliberately larger than the media default:
 	// scrubbing back and forth across a movie reuses these blocks instead
 	// of re-fetching them from Telegram.
@@ -229,6 +229,10 @@ func (o *Opener) Open(ctx context.Context, channelID, fileID int64) (*Reader, er
 		segments:   segments,
 		ranges:     sharedReader,
 		openerDone: openerDone,
+		// An original-only read resolves the pristine body, so it must not
+		// carry the proxy marker even when a mapping is ready: adapters
+		// key proxy metadata off this flag.
+		proxy: file.Proxy && !media.OriginalOnly(ctx),
 	}
 	if !file.Encrypted {
 		return reader, nil
@@ -341,6 +345,30 @@ func (o *Opener) ensureOpen() error {
 		return ErrClosed
 	}
 	return nil
+}
+
+// ProxyPlaintextSize returns the ready transcoded proxy's plaintext size for
+// one file. It reports false when no ready mapping exists, the opener is
+// closed, or ctx wants the pristine original. The mount adapter uses it to
+// accept a proxy-sized reader that no longer matches the projected entry.
+func (o *Opener) ProxyPlaintextSize(ctx context.Context, channelID, fileID int64) (int64, bool) {
+	if o == nil || media.OriginalOnly(ctx) {
+		return 0, false
+	}
+	o.mu.RLock()
+	resolver := o.resolver
+	o.mu.RUnlock()
+	if resolver == nil {
+		return 0, false
+	}
+	if err := o.ensureOpen(); err != nil {
+		return 0, false
+	}
+	mapping, err := resolver.ProxyLookup(ctx, channelID, fileID)
+	if err != nil {
+		return 0, false
+	}
+	return mapping.PlaintextSize, true
 }
 
 func (o *Opener) normalizeOpenError(err error) error {
@@ -538,6 +566,18 @@ type Reader struct {
 	decryptor  *tdcrypto.RandomAccessDecryptor
 	owner      *Opener
 	closed     atomic.Bool
+	// proxy marks a reader built from the ready transcoded streaming
+	// derivative rather than the original body. size then describes the
+	// proxy plaintext, and adapters must answer proxy-aware metadata
+	// (size, MP4 name and type, distinct ETag) for it.
+	proxy bool
+}
+
+// ProxyPlayback reports whether this reader serves the transcoded streaming
+// derivative. mountfs adapters use it (via File.ProxyPlaybackSize) to serve
+// proxy-coherent responses without database access on the read path.
+func (r *Reader) ProxyPlayback() bool {
+	return r != nil && r.proxy
 }
 
 func (r *Reader) Size() int64 {

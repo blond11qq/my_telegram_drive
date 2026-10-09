@@ -449,7 +449,7 @@ func TestUploadRejectsAnUnboundedDirectBatchBeforeWorkStarts(t *testing.T) {
 func TestUploadEncryptedUsesCiphertextAndPlaintextMetadata(t *testing.T) {
 	svc, db, fakeTG, _ := newTestService(t)
 	path := writeTempFile(t, "plain")
-	uploadKey := []byte("master-key")
+	uploadKey := bytes.Repeat([]byte{7}, 32)
 	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
 		if !wantEncrypted {
 			return nil, nil
@@ -495,6 +495,63 @@ func TestUploadEncryptedUsesCiphertextAndPlaintextMetadata(t *testing.T) {
 		t.Fatalf("sent files = %+v, want ciphertext size 10", sent)
 	}
 	assertKeyZeroed(t, uploadKey)
+}
+
+// An encrypted upload hides the filename on the wire: the caption carries
+// nenc (never the real name), the attachment is opaque, and the tail names
+// the attachment. The returned op keeps plaintext in memory for local use.
+func TestUploadEncryptedSealsFilename(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	path := filepath.Join(t.TempDir(), "secret-diary.txt")
+	if err := os.WriteFile(path, []byte("plain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			return nil, nil
+		}
+		return bytes.Repeat([]byte{7}, 32), nil
+	}
+	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tmp.Write([]byte("ciphertext!")); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		return tmp, nil
+	}
+
+	metas, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if len(metas) != 1 || metas[0].Name != "secret-diary.txt" {
+		t.Fatalf("metadata keeps the real name: %+v", metas)
+	}
+	sent := fakeTG.SentFiles()
+	if len(sent) != 1 {
+		t.Fatalf("sent files = %+v", sent)
+	}
+	if strings.Contains(sent[0].Caption, "secret-diary") {
+		t.Fatalf("caption leaks the name: %q", sent[0].Caption)
+	}
+	for _, want := range []string{"|nenc=v1:", "|enc=1|ev=1|kid=1"} {
+		if !strings.Contains(sent[0].Caption, want) {
+			t.Fatalf("caption %q misses %q", sent[0].Caption, want)
+		}
+	}
+	if !strings.HasPrefix(sent[0].Name, "f-") || strings.Contains(sent[0].Name, "secret") {
+		t.Fatalf("attachment = %q, want opaque", sent[0].Name)
+	}
 }
 
 func TestUploadEncryptedRequiresPasswordBeforeSend(t *testing.T) {

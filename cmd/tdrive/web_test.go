@@ -511,6 +511,25 @@ func TestParseWebArgs(t *testing.T) {
 	}
 }
 
+func TestResolveWebListenFailsWithoutTailscale(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, err := resolveWebListen("", 8080); err == nil {
+		t.Fatal("resolveWebListen without tailscale accepted, want error")
+	} else if !strings.Contains(err.Error(), "tailscale IPv4 not available") {
+		t.Fatalf("resolveWebListen error = %q, want tailscale IPv4 not available", err)
+	}
+}
+
+func TestResolveWebListenExplicitFlagOverrides(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if got, err := resolveWebListen("127.0.0.1:9090", 8080); err != nil || got != "127.0.0.1:9090" {
+		t.Fatalf("explicit host:port = %q, %v; want 127.0.0.1:9090", got, err)
+	}
+	if got, err := resolveWebListen("127.0.0.1", 8080); err != nil || got != "127.0.0.1:8080" {
+		t.Fatalf("explicit host = %q, %v; want 127.0.0.1:8080", got, err)
+	}
+}
+
 func TestEscapeWebDAVPath(t *testing.T) {
 	if got := escapeWebDAVPath("/a b/한글.mp4"); got != "/a%20b/%ED%95%9C%EA%B8%80.mp4" {
 		t.Fatalf("escaped = %q", got)

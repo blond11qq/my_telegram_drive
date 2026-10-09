@@ -183,6 +183,41 @@ func TestPartAttachmentName(t *testing.T) {
 	}
 }
 
+// TestPartAttachmentNameEncryptedMode covers the opaque naming for
+// encrypted drives: single uploads hide behind f-<uuid8>.bin, multipart
+// behind p-<uuid8>-NNNNN.bin, never the real stem. Names are deterministic
+// per upload UUID so retries resend the same cosmetic name.
+func TestPartAttachmentNameEncryptedMode(t *testing.T) {
+	single := partAttachmentNameFor("secret.mp4", true, "op-1", 0, 1)
+	if !strings.HasPrefix(single, "f-") || !strings.HasSuffix(single, ".bin") || strings.Contains(single, "secret") {
+		t.Fatalf("single opaque = %q", single)
+	}
+	if again := partAttachmentNameFor("secret.mp4", true, "op-1", 0, 1); again != single {
+		t.Fatalf("retry renamed %q to %q", single, again)
+	}
+	if other := partAttachmentNameFor("secret.mp4", true, "op-2", 0, 1); other == single {
+		t.Fatalf("different uploads share %q", single)
+	}
+	multi := partAttachmentNameFor("secret.mp4", true, "op-1", 3, 4)
+	if !strings.HasPrefix(multi, "p-") || !strings.HasSuffix(multi, "-00003.bin") || strings.Contains(multi, "secret") {
+		t.Fatalf("multi opaque = %q", multi)
+	}
+	// Plaintext keeps the cosmetic real-name behavior.
+	if got := partAttachmentNameFor("secret.mp4", false, "op-1", 0, 1); got != "secret.mp4" {
+		t.Fatalf("plaintext single = %q", got)
+	}
+}
+
+func TestProxyOutputNameModes(t *testing.T) {
+	if got := proxyOutputName("movie.mkv", false, "op-1"); got != "movie.proxy.mp4" {
+		t.Fatalf("plaintext proxy name = %q", got)
+	}
+	opaque := proxyOutputName("movie.mkv", true, "op-1")
+	if !strings.HasPrefix(opaque, "f-") || strings.Contains(opaque, "movie") {
+		t.Fatalf("encrypted proxy name = %q, leaks stem", opaque)
+	}
+}
+
 // TestUploadHiddenSinglePartUsesOriginalFilename covers a user-requested
 // change: the Telegram document attachment for a single-part upload (the
 // common case) should show the real original filename when browsed directly

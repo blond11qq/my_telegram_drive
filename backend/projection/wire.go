@@ -65,6 +65,9 @@ func Parse(raw string) (Op, error) {
 		if err := setName(&op, kv["n"]); err != nil {
 			return Op{}, err
 		}
+		if err := setNameEnc(&op, kv); err != nil {
+			return Op{}, err
+		}
 	case OpMeta:
 		if err := setObj(&op, kv["obj"], FileIDPrefix); err != nil {
 			return Op{}, err
@@ -73,6 +76,9 @@ func Parse(raw string) (Op, error) {
 			return Op{}, err
 		}
 		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setNameEnc(&op, kv); err != nil {
 			return Op{}, err
 		}
 	case OpMkdir:
@@ -85,11 +91,17 @@ func Parse(raw string) (Op, error) {
 		if err := setName(&op, kv["n"]); err != nil {
 			return Op{}, err
 		}
+		if err := setNameEnc(&op, kv); err != nil {
+			return Op{}, err
+		}
 	case OpRename:
 		if err := setObjAny(&op, kv["obj"]); err != nil {
 			return Op{}, err
 		}
 		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setNameEnc(&op, kv); err != nil {
 			return Op{}, err
 		}
 	case OpMove:
@@ -122,6 +134,9 @@ func Parse(raw string) (Op, error) {
 			return Op{}, err
 		}
 		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setNameEnc(&op, kv); err != nil {
 			return Op{}, err
 		}
 		if err := setPartCount(&op, kv["pc"]); err != nil {
@@ -166,6 +181,9 @@ func Parse(raw string) (Op, error) {
 		if err := setName(&op, kv["n"]); err != nil {
 			return Op{}, err
 		}
+		if err := setNameEnc(&op, kv); err != nil {
+			return Op{}, err
+		}
 		if err := setContentReference(&op, kv); err != nil {
 			return Op{}, err
 		}
@@ -180,6 +198,9 @@ func Parse(raw string) (Op, error) {
 			return Op{}, err
 		}
 		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setNameEnc(&op, kv); err != nil {
 			return Op{}, err
 		}
 	case OpFileReplace:
@@ -209,6 +230,9 @@ func Parse(raw string) (Op, error) {
 			return Op{}, err
 		}
 		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setNameEnc(&op, kv); err != nil {
 			return Op{}, err
 		}
 		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
@@ -276,6 +300,9 @@ func Parse(raw string) (Op, error) {
 		if err := setName(&op, kv["n"]); err != nil {
 			return Op{}, err
 		}
+		if err := setNameEnc(&op, kv); err != nil {
+			return Op{}, err
+		}
 		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
 			return Op{}, err
 		}
@@ -341,29 +368,25 @@ func Format(op Op) string {
 	case OpFileUpload:
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 		appendFileAttrs(&b, op)
 	case OpMeta:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 		appendFileAttrs(&b, op)
 	case OpMkdir:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 	case OpRename:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 	case OpMove:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
@@ -386,8 +409,7 @@ func Format(op Op) string {
 		b.WriteString(op.UploadUUID)
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 		b.WriteString("|pc=")
 		b.WriteString(strconv.Itoa(op.PartCount))
 		appendFileAttrs(&b, op)
@@ -412,8 +434,7 @@ func Format(op Op) string {
 		appendWritableEnvelope(&b, op)
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 		appendContentReference(&b, op)
 		appendFileAttrs(&b, op)
 	case OpFolderCommit:
@@ -422,8 +443,7 @@ func Format(op Op) string {
 		b.WriteString(op.Obj)
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 	case OpFileReplace:
 		appendWritableEnvelope(&b, op)
 		b.WriteString("|obj=")
@@ -440,8 +460,7 @@ func Format(op Op) string {
 		b.WriteString(op.Obj)
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 		b.WriteString("|rev=")
 		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
 		if op.Overwrite {
@@ -485,8 +504,7 @@ func Format(op Op) string {
 		b.WriteString(op.Obj)
 		b.WriteString("|p=")
 		b.WriteString(op.Parent)
-		b.WriteString("|n=")
-		b.WriteString(url.QueryEscape(op.Name))
+		appendOpName(&b, op)
 		b.WriteString("|rev=")
 		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
 	}
@@ -622,14 +640,18 @@ func appendFileAttrs(b *strings.Builder, op Op) {
 		b.WriteString(strconv.FormatInt(op.FileUploadTime, 10))
 	}
 	if op.Encrypted {
-		b.WriteString("|enc=1")
-		v := op.EncryptionVersion
-		if v == 0 {
-			v = 1
-		}
-		if v != 1 {
-			b.WriteString("|ev=")
-			b.WriteString(strconv.Itoa(v))
+		// Sealed ops already carry enc/ev/kid beside nenc; emitting them
+		// again would only duplicate identical keys.
+		if op.NameEnc == "" {
+			b.WriteString("|enc=1")
+			v := op.EncryptionVersion
+			if v == 0 {
+				v = 1
+			}
+			if v != 1 {
+				b.WriteString("|ev=")
+				b.WriteString(strconv.Itoa(v))
+			}
 		}
 		if op.PlaintextSize > 0 {
 			b.WriteString("|psz=")
@@ -679,6 +701,58 @@ func setName(op *Op, raw string) error {
 	}
 	op.Name = decoded
 	return nil
+}
+
+// setNameEnc reads the sealed filename envelope for ops that carry one.
+// Absent nenc means a legacy real-name caption (or a plaintext drive) and
+// is not an error: the n= value stands. A present nenc requires the kid
+// key-version tag; undecryptable envelopes (wrong key generation, corrupt
+// bytes) are NOT rejected here but surface at name resolution, where a
+// locked vault degrades to a placeholder instead of failing the sync.
+func setNameEnc(op *Op, kv map[string]string) error {
+	raw, ok := kv["nenc"]
+	if !ok {
+		return nil
+	}
+	if !strings.HasPrefix(raw, "v1:") {
+		return ErrWireMalformed
+	}
+	kid, ok := kv["kid"]
+	if !ok {
+		return ErrWireMalformed
+	}
+	version, err := strconv.Atoi(kid)
+	if err != nil || version <= 0 {
+		return ErrWireMalformed
+	}
+	op.NameEnc = raw
+	op.NameKeyVersion = version
+	return nil
+}
+
+// appendOpName writes the filename fields. Sealed ops hide the name behind
+// nenc with an n=_ placeholder plus the encryption markers; everything else
+// keeps the legacy escaped real name.
+func appendOpName(b *strings.Builder, op Op) {
+	if op.NameEnc != "" {
+		version := op.EncryptionVersion
+		if version <= 0 {
+			version = 1
+		}
+		kid := op.NameKeyVersion
+		if kid <= 0 {
+			kid = 1
+		}
+		b.WriteString("|n=_|nenc=")
+		b.WriteString(op.NameEnc)
+		b.WriteString("|enc=1|ev=")
+		b.WriteString(strconv.Itoa(version))
+		b.WriteString("|kid=")
+		b.WriteString(strconv.Itoa(kid))
+		return
+	}
+	b.WriteString("|n=")
+	b.WriteString(url.QueryEscape(op.Name))
 }
 
 func setUUID(op *Op, raw string) error {

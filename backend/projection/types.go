@@ -70,6 +70,15 @@ type Op struct {
 	Parent string
 	Name   string
 
+	// NameEnc carries the sealed filename envelope (v1:<base64>) for
+	// encrypted drives. op.Name stays plaintext in memory and in the local
+	// replay payload; only the wire header hides it behind nenc with n=_.
+	// Empty for plaintext drives and for legacy real-name history.
+	NameEnc string
+	// NameKeyVersion tags the key generation that sealed NameEnc. 0 means
+	// the initial vault key.
+	NameKeyVersion int
+
 	// ExpectedRevision provides compare-and-swap semantics for mutations of
 	// existing objects. New file commits always start at revision one.
 	ExpectedRevision            int64

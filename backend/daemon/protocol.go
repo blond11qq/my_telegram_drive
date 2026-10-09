@@ -19,7 +19,10 @@ var ErrInvalidRequest = errors.New("invalid request")
 // 2: personal-drive setup commands (v1.7.1).
 // 3: request-scoped drive IDs, ping, and machine-readable error codes.
 // 4: vault initial-password creation (vault.create).
-const ProtocolVersion = 4
+// 5: streaming-proxy transcode trigger and status (proxy.transcode,
+// proxy.status).
+// 6: streaming-proxy HLS byte serving (proxy.hls).
+const ProtocolVersion = 6
 
 const (
 	CommandPing               = "daemon.ping"
@@ -58,6 +61,9 @@ const (
 	CommandVaultLock          = "vault.lock"
 	CommandUpload             = "transfer.upload"
 	CommandDownload           = "transfer.download"
+	CommandProxyTranscode     = "proxy.transcode"
+	CommandProxyStatus        = "proxy.status"
+	CommandProxyHLS           = "proxy.hls"
 	CommandMountStart         = "mount.start"
 	CommandMountStatus        = "mount.status"
 	CommandMountStop          = "mount.stop"
@@ -370,6 +376,57 @@ type DownloadResponse struct {
 	Drive     Drive  `json:"drive"`
 	Entry     Entry  `json:"entry"`
 	SavedPath string `json:"saved_path"`
+}
+
+// ProxyJobStatus is the pollable transcode record for one file. State is one
+// of "none" (never triggered), "running", "ready" or "failed". NeedsProxy is
+// the name-based direct-play assessment with its reason, advisory only: a
+// manual trigger always transcodes.
+type ProxyJobStatus struct {
+	FileID           int64   `json:"file_id"`
+	FileName         string  `json:"file_name"`
+	State            string  `json:"state"`
+	Progress         float64 `json:"progress"`
+	NeedsProxy       bool    `json:"needs_proxy"`
+	NeedsProxyReason string  `json:"needs_proxy_reason"`
+	// HasHLS reports a packaged fMP4 VOD rendition alongside the MP4 proxy.
+	HasHLS    bool   `json:"has_hls"`
+	Error     string `json:"error,omitempty"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
+}
+
+type ProxyTranscodeRequest struct {
+	Path    string `json:"path"`
+	DriveID int64  `json:"drive_id,omitzero"`
+}
+
+type ProxyTranscodeResponse struct {
+	Drive Drive          `json:"drive"`
+	Job   ProxyJobStatus `json:"job"`
+}
+
+type ProxyStatusRequest struct {
+	Path    string `json:"path"`
+	DriveID int64  `json:"drive_id,omitzero"`
+}
+
+type ProxyStatusResponse struct {
+	Drive Drive          `json:"drive"`
+	Job   ProxyJobStatus `json:"job"`
+}
+
+type ProxyHLSRequest struct {
+	Path    string `json:"path"`
+	File    string `json:"file"`
+	DriveID int64  `json:"drive_id,omitzero"`
+}
+
+type ProxyHLSResponse struct {
+	Drive       Drive  `json:"drive"`
+	File        string `json:"file"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	DataBase64  string `json:"data_base64"`
 }
 
 type MountStartRequest struct {

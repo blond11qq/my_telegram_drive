@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -1415,5 +1416,71 @@ func projectRaw(t *testing.T, db *sql.DB, msgID int64, op projection.Op) {
 	t.Helper()
 	if _, err := projection.ProjectFromOp(db, testDriveID, msgID, op, 1, projection.Format(op)); err != nil {
 		t.Fatalf("ProjectFromOp: %v", err)
+	}
+}
+
+type stubMasterKeys struct {
+	key []byte
+	err error
+}
+
+func (m stubMasterKeys) Key() ([]byte, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return append([]byte(nil), m.key...), nil
+}
+
+func enableDriveEncryption(t *testing.T, db *sql.DB, channelID int64) {
+	t.Helper()
+	cfg := projection.EncryptionConfig{
+		ChannelID:        channelID,
+		Enabled:          true,
+		KDFSalt:          bytes.Repeat([]byte{0x11}, 16),
+		KDFParamsJSON:    `{"memory":65536,"time":3,"parallelism":4,"key_len":32,"salt_len":16}`,
+		WrappedMasterKey: bytes.Repeat([]byte{0x22}, 72),
+		KeyCheck:         bytes.Repeat([]byte{0x33}, 59),
+		Version:          1,
+	}
+	if err := projection.PutEncryptionConfig(db, cfg); err != nil {
+		t.Fatalf("enable encryption: %v", err)
+	}
+}
+
+// Commits on encrypted drives seal the destination name before the header
+// goes out; without a key provider they fail closed instead of leaking it.
+func TestSealOperationNameEncryptedDrive(t *testing.T) {
+	db := newProjectionDB(t)
+	enableDriveEncryption(t, db, testDriveID)
+	key := bytes.Repeat([]byte{31}, 32)
+
+	sealed := &TelegramRemote{db: db, driveID: testDriveID, masterKeys: stubMasterKeys{key: key}}
+	op := projection.Op{Type: projection.OpFileCommit, Parent: projection.RootParent, Name: "secret.mp4"}
+	if err := sealed.sealOperationName(testDriveID, &op); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if op.Name != "secret.mp4" || op.NameEnc == "" {
+		t.Fatalf("op = %+v, want plaintext in memory plus envelope", op)
+	}
+	header := projection.Format(op)
+	if strings.Contains(header, "secret.mp4") {
+		t.Fatalf("plaintext on the wire: %q", header)
+	}
+
+	bare := &TelegramRemote{db: db, driveID: testDriveID}
+	plain := projection.Op{Type: projection.OpFolderCommit, Parent: projection.RootParent, Name: "secret"}
+	if err := bare.sealOperationName(testDriveID, &plain); err == nil {
+		t.Fatal("commit without a key provider accepted on an encrypted drive")
+	}
+
+	// Plaintext drives and nameless ops pass through untouched.
+	open := &TelegramRemote{db: newProjectionDB(t), driveID: testDriveID, masterKeys: stubMasterKeys{key: key}}
+	untouched := projection.Op{Type: projection.OpFileCommit, Parent: projection.RootParent, Name: "open.mp4"}
+	if err := open.sealOperationName(testDriveID, &untouched); err != nil || untouched.NameEnc != "" {
+		t.Fatalf("plaintext drive sealed: %+v %v", untouched, err)
+	}
+	nameless := projection.Op{Type: projection.OpTrashTree, Obj: "f:1"}
+	if err := sealed.sealOperationName(testDriveID, &nameless); err != nil {
+		t.Fatalf("nameless op: %v", err)
 	}
 }

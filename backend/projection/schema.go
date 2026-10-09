@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 14
+const currentSchemaVersion = 16
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -197,6 +197,12 @@ func EnsureSchema(db *sql.DB) error {
 	if err := EnsureRenditionSchema(db); err != nil {
 		return err
 	}
+	if err := EnsureProxySchema(db); err != nil {
+		return err
+	}
+	if err := EnsureHiddenNameSchema(db); err != nil {
+		return err
+	}
 	if err := ensureCompatibleIndexes(db); err != nil {
 		return err
 	}
@@ -382,6 +388,8 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 			return err
 		}
 	}
+	// Version 15 added proxy_jobs through EnsureSchema; no backfill is required.
+	// Version 16 added hidden_name_queue through EnsureSchema; no backfill is required.
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {
 		return fmt.Errorf("projection: clear schema version: %w", err)
 	}

@@ -557,6 +557,48 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 			return ErrorResponse(req.ID, err)
 		}
 		return frame
+	case CommandProxyTranscode:
+		var in ProxyTranscodeRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.proxyTranscode(ctx, in.Path, in.DriveID)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandProxyStatus:
+		var in ProxyStatusRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.proxyStatus(ctx, in.Path, in.DriveID)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandProxyHLS:
+		var in ProxyHLSRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.proxyHLS(ctx, in.Path, in.File, in.DriveID)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
 	case CommandMountStart:
 		var in MountStartRequest
 		if err := decodePayload(req.Payload, &in); err != nil {

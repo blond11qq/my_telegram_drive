@@ -393,6 +393,40 @@ func (c *Client) DownloadInDrive(driveID int64, remotePath string, localPath str
 	return out, nil
 }
 
+func (c *Client) ProxyTranscodeInDrive(driveID int64, remotePath string) (ProxyTranscodeResponse, error) {
+	var out ProxyTranscodeResponse
+	if err := c.call(CommandProxyTranscode, ProxyTranscodeRequest{
+		Path:    remotePath,
+		DriveID: driveID,
+	}, &out); err != nil {
+		return ProxyTranscodeResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ProxyStatusInDrive(driveID int64, remotePath string) (ProxyStatusResponse, error) {
+	var out ProxyStatusResponse
+	if err := c.call(CommandProxyStatus, ProxyStatusRequest{
+		Path:    remotePath,
+		DriveID: driveID,
+	}, &out); err != nil {
+		return ProxyStatusResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ProxyHLSInDrive(driveID int64, remotePath string, file string) (ProxyHLSResponse, error) {
+	var out ProxyHLSResponse
+	if err := c.call(CommandProxyHLS, ProxyHLSRequest{
+		Path:    remotePath,
+		File:    file,
+		DriveID: driveID,
+	}, &out); err != nil {
+		return ProxyHLSResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) MountStart(selector string, windowsDrive string, mode string) (MountResponse, error) {
 	var out MountResponse
 	if err := c.call(CommandMountStart, MountStartRequest{Selector: selector, WindowsDrive: windowsDrive, Mode: mode}, &out); err != nil {

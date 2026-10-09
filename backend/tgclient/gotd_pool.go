@@ -17,10 +17,11 @@ import (
 // data center. Telegram meters file transfer per connection, so the single
 // connection gotd dials for a FILE_MIGRATE hop tops out near a megabyte a
 // second however many requests are in flight on it. Desktop clients download
-// over several connections; four is their usual number. Each one costs a key
-// exchange and an authorization import when the pool is first dialed, which
-// WarmTransport pays at startup.
-const MediaPoolSize = 4
+// over several connections; eight doubles their usual number for high-
+// throughput streaming while staying well under twenty total connections.
+// Each one costs a key exchange and an authorization import when the pool is
+// first dialed, which WarmTransport pays at startup.
+const MediaPoolSize = 8
 
 // UploadThreads is how many 512 KiB parts one upload keeps in flight across
 // the home data center's pool. gotd's default is a single part, which makes

@@ -61,6 +61,17 @@ func (s *Service) MetaContext(ctx context.Context, channelID int64, msgID int, n
 		FileSize:       size,
 		FileUploadTime: s.now().Unix(),
 	}
+	if encrypted, key, err := s.encryptedFileKey(channelID, msgID); err != nil {
+		clearOwnedKey(key)
+		return err
+	} else if encrypted {
+		defer clearOwnedKey(key)
+		if err := projection.SealOpName(&op, cleanName, key); err != nil {
+			return err
+		}
+	} else {
+		clearOwnedKey(key)
+	}
 	_, err = s.emit(ctx, channelID, op)
 	return err
 }
@@ -70,16 +81,23 @@ func (s *Service) MetaContext(ctx context.Context, channelID int64, msgID int, n
 // can change it. A locked vault returns the "encryption password required" error
 // the frontend prompts on. An unknown encryption state does not block.
 func (s *Service) requireEncryptedFileKey(channelID int64, msgID int) error {
+	_, key, err := s.encryptedFileKey(channelID, msgID)
+	clearOwnedKey(key)
+	return err
+}
+
+// encryptedFileKey returns the file's encrypted flag with a caller-owned key
+// copy when encrypted (nil key otherwise). Callers clear the key.
+func (s *Service) encryptedFileKey(channelID int64, msgID int) (bool, []byte, error) {
 	encrypted, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, int64(msgID))
 	if err != nil {
-		return nil
+		return false, nil, nil
 	}
 	masterKey, err := s.requireEncryptionKey(encrypted)
-	clearOwnedKey(masterKey)
 	if err != nil {
-		return err
+		return false, masterKey, err
 	}
-	return nil
+	return encrypted, masterKey, nil
 }
 
 func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newName string) (err error) {
@@ -106,9 +124,12 @@ func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newNam
 	if !projection.FileExists(s.DB, channelID, int64(msgID)) {
 		return fmt.Errorf("File not found")
 	}
-	if err := s.requireEncryptedFileKey(channelID, msgID); err != nil {
+	encrypted, key, err := s.encryptedFileKey(channelID, msgID)
+	if err != nil {
+		clearOwnedKey(key)
 		return err
 	}
+	defer clearOwnedKey(key)
 	if err := s.requireOwnerForShared(ctx, channelID, msgID, "rename"); err != nil {
 		return err
 	}
@@ -117,6 +138,11 @@ func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newNam
 		Type: projection.OpRename,
 		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
 		Name: newName,
+	}
+	if encrypted {
+		if err := projection.SealOpName(&op, newName, key); err != nil {
+			return err
+		}
 	}
 	_, err = s.emit(ctx, channelID, op)
 	return err

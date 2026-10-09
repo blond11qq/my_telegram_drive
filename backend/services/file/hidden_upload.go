@@ -25,7 +25,19 @@ import (
 // view has no other way to show they belong together. An empty name (should
 // not happen; callers validate this upstream) falls back to the old scheme
 // rather than uploading a document with a blank filename.
+//
+// On encrypted drives the real name must never reach Telegram: attachments
+// go out opaque (f-<uuid8>.bin single, p-<uuid8>-NNNNN.bin multipart),
+// derived deterministically from a per-upload UUID so retries resend the
+// same cosmetic name.
 func partAttachmentName(originalName string, partIndex, partCount int) string {
+	return partAttachmentNameFor(originalName, false, "", partIndex, partCount)
+}
+
+func partAttachmentNameFor(originalName string, encrypted bool, nameUUID string, partIndex, partCount int) string {
+	if encrypted {
+		return opaqueAttachmentName(nameUUID, partIndex, partCount)
+	}
 	if originalName == "" {
 		return fmt.Sprintf("part-%05d", partIndex)
 	}
@@ -33,6 +45,19 @@ func partAttachmentName(originalName string, partIndex, partCount int) string {
 		return originalName
 	}
 	return fmt.Sprintf("%s.part%d", originalName, partIndex)
+}
+
+// opaqueAttachmentName derives a content-hiding attachment name from a
+// per-upload UUID (operation or upload identity). The digest is one-way, so
+// the channel view reveals nothing about the source; determinism keeps
+// retries idempotent on the cosmetic name too.
+func opaqueAttachmentName(nameUUID string, partIndex, partCount int) string {
+	digest := sha256.Sum256([]byte("tdrive.opaque-name.v1\x00" + nameUUID))
+	short := hex.EncodeToString(digest[:4])
+	if partCount <= 1 {
+		return "f-" + short + ".bin"
+	}
+	return fmt.Sprintf("p-%s-%05d.bin", short, partIndex)
 }
 
 // HiddenUploadRequest describes an immutable, already-staged stored
@@ -152,7 +177,7 @@ func (s *Service) uploadHiddenParts(ctx context.Context, channelID int64, reques
 			source,
 			partOffset,
 			partLength,
-			partAttachmentName(request.Name, partIndex, plan.partCount),
+			partAttachmentNameFor(request.Name, request.Encrypted, request.OperationID, partIndex, plan.partCount),
 			caption,
 		)
 		if err != nil {
@@ -277,7 +302,7 @@ func (s *Service) recoverHiddenParts(
 			source,
 			offset,
 			length,
-			partAttachmentName(request.Name, uncertainPart, plan.partCount),
+			partAttachmentNameFor(request.Name, request.Encrypted, request.OperationID, uncertainPart, plan.partCount),
 			projection.Format(partOp),
 		)
 		if err != nil {

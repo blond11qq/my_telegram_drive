@@ -520,6 +520,37 @@ var pvList = [], pvIdx = -1;
 function fileURL(e, download) {
   return withToken("/file?path=" + encodeURIComponent(e.path) + (download ? "&download=1" : ""));
 }
+function proxyHLSURL(e, f) {
+  return withToken("/proxy-hls?path=" + encodeURIComponent(e.path) + "&f=" + f);
+}
+/* HLS upgrade is opportunistic: the native mp4 proxy stays the source until
+   an HLS mapping proves available, and every failure below keeps it. Safari
+   takes the playlist directly; other browsers get hls.js from CDN, and a CDN
+   outage simply never replaces the working native source. */
+function watchProxyHLS(el, e) {
+  fetch(withToken("/api/proxy/status?path=" + encodeURIComponent(e.path))).then(function(r) { return r.json(); }).then(function(s) {
+    if (!s || !s.ok || !s.job || !s.job.has_hls) return;
+    var pl = proxyHLSURL(e, "playlist");
+    if (el.canPlayType && el.canPlayType("application/vnd.apple.mpegurl")) { el.src = pl; return; }
+    if (window.Hls) { attachHls(el, pl); return; }
+    var sc = document.createElement("script");
+    sc.src = "https://cdn.jsdelivr.net/npm/hls.js@1";
+    sc.onload = function() { attachHls(el, pl); };
+    document.head.appendChild(sc);
+  }).catch(function() {});
+}
+function attachHls(el, pl) {
+  try {
+    if (!window.Hls || !window.Hls.isSupported()) return;
+    if (!el.dataset.mp4) el.dataset.mp4 = el.src;
+    var hls = new window.Hls();
+    hls.on(window.Hls.Events.ERROR, function(ev, data) {
+      if (data && data.fatal) { try { hls.destroy(); } catch (_) {} el.src = el.dataset.mp4; }
+    });
+    hls.loadSource(pl);
+    hls.attachMedia(el);
+  } catch (_) {}
+}
 function preview(e) {
   pvList = (state.viewList || []).filter(previewable);
   pvIdx = -1;
@@ -540,7 +571,7 @@ function showPv() {
   var url = fileURL(e, false);
   $("dl").href = fileURL(e, true);
   var el = null;
-  if (["mp4","m4v","mov","webm","mkv","avi"].indexOf(ext) >= 0) { el = document.createElement("video"); el.controls = true; el.preload = "auto"; el.src = url; }
+  if (["mp4","m4v","mov","webm","mkv","avi"].indexOf(ext) >= 0) { el = document.createElement("video"); el.controls = true; el.preload = "auto"; el.src = url; watchProxyHLS(el, e); }
   else if (["mp3","m4a","aac","wav","flac","ogg","opus"].indexOf(ext) >= 0) { el = document.createElement("audio"); el.controls = true; el.src = url; }
   else if (["jpg","jpeg","png","gif","webp","bmp"].indexOf(ext) >= 0) { el = document.createElement("img"); el.src = url; }
   else if (ext === "pdf") { el = document.createElement("iframe"); el.src = url; el.style.width = "80vw"; el.style.height = "78vh"; }

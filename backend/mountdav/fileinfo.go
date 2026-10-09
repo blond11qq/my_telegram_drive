@@ -10,6 +10,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"TDrive/backend/mountfs"
@@ -17,17 +18,38 @@ import (
 
 type fileInfo struct {
 	entry mountfs.Entry
+	// proxySize is non-negative when the opened content is the ready
+	// transcoded streaming derivative rather than the projected original.
+	// Size, name, type and ETag then describe the proxy so players receive
+	// a coherent MP4 response instead of proxy bytes under original metadata.
+	proxySize int64
+	proxy     bool
 }
 
 const resourceETagDomain = "tdrive.mount.resource-etag.v1\x00"
 
 func newFileInfo(entry mountfs.Entry) fileInfo {
-	return fileInfo{entry: entry}
+	return fileInfo{entry: entry, proxySize: -1}
+}
+
+// asProxy re-targets metadata at the transcoded derivative: its own size, an
+// MP4 name and type (the proxy is always faststart MP4), and a distinct ETag
+// so caches never mix proxy and original bytes under one entity tag.
+func (info fileInfo) asProxy(size int64) fileInfo {
+	info.proxy = true
+	info.proxySize = size
+	return info
 }
 
 func (info fileInfo) Name() string {
 	if info.entry.ID == mountfs.RootID && info.entry.Name == "" {
 		return "."
+	}
+	if info.proxy {
+		if ext := filepath.Ext(info.entry.Name); ext != "" {
+			return strings.TrimSuffix(info.entry.Name, ext) + ".mp4"
+		}
+		return info.entry.Name + ".mp4"
 	}
 	return info.entry.Name
 }
@@ -35,6 +57,9 @@ func (info fileInfo) Name() string {
 func (info fileInfo) Size() int64 {
 	if info.IsDir() {
 		return 0
+	}
+	if info.proxy {
+		return info.proxySize
 	}
 	return info.entry.Size
 }
@@ -68,6 +93,9 @@ func (info fileInfo) ContentType(ctx context.Context) (string, error) {
 	if info.IsDir() {
 		return "httpd/unix-directory", nil
 	}
+	if info.proxy {
+		return "video/mp4", nil
+	}
 	if contentType := mime.TypeByExtension(filepath.Ext(info.entry.Name)); contentType != "" {
 		return contentType, nil
 	}
@@ -75,7 +103,14 @@ func (info fileInfo) ContentType(ctx context.Context) (string, error) {
 }
 
 func (info fileInfo) ETag(ctx context.Context) (string, error) {
-	return EntryETag(ctx, info.entry)
+	etag, err := EntryETag(ctx, info.entry)
+	if err != nil {
+		return "", err
+	}
+	if info.proxy && strings.HasSuffix(etag, `"`) {
+		return strings.TrimSuffix(etag, `"`) + `.proxy"`, nil
+	}
+	return etag, nil
 }
 
 // EntryETag returns the strong entity tag used by WebDAV responses for one

@@ -103,6 +103,9 @@ func (s *Service) CreateContext(ctx context.Context, channelID int64, name strin
 		Parent: parent,
 		Name:   name,
 	}
+	if err := s.sealNameForDrive(channelID, &op, name); err != nil {
+		return Folder{}, err
+	}
 	if err := s.emit(ctx, channelID, op); err != nil {
 		slog.Error("folder: create failed", "channel_id", channelID, "name", name, "parent_id", parent, "error", err)
 		return Folder{}, fmt.Errorf("create folder failed: %w", err)
@@ -182,6 +185,9 @@ func (s *Service) RenameContext(ctx context.Context, channelID int64, folderID s
 		Type: projection.OpRename,
 		Obj:  folderID,
 		Name: newName,
+	}
+	if err := s.sealNameForDrive(channelID, &op, newName); err != nil {
+		return err
 	}
 	if err := s.emit(ctx, channelID, op); err != nil {
 		slog.Error("folder: rename failed", "channel_id", channelID, "folder_id", folderID, "error", err)
@@ -319,6 +325,26 @@ func (s *Service) requireSubtreeEncryptionKey(channelID int64, folderID string) 
 		return err
 	}
 	return s.requireEncryptedKey(files)
+}
+
+// sealNameForDrive seals a folder name when the drive is encrypted, so the
+// mkdir/rename caption never carries the plaintext. Plaintext drives pass
+// through untouched. Fail closed: an encrypted drive without a key provider
+// refuses the mutation rather than leaking the name.
+func (s *Service) sealNameForDrive(channelID int64, op *projection.Op, name string) error {
+	if !projection.DriveEncrypted(s.DB, channelID) {
+		return nil
+	}
+	if s.RequireEncryptionKey == nil {
+		return fmt.Errorf("folder: encrypted drive needs an encryption key")
+	}
+	key, err := s.RequireEncryptionKey(true)
+	if err != nil {
+		clear(key)
+		return err
+	}
+	defer clear(key)
+	return projection.SealOpName(op, name, key)
 }
 
 func (s *Service) ready() error {

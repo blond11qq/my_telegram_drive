@@ -84,6 +84,10 @@ type LogicalFile struct {
 	EncryptionVersion int       `json:"encryption_version"`
 	Multipart         bool      `json:"multipart"`
 	Segments          []Segment `json:"segments"`
+	// Proxy reports that Segments point at the ready transcoded streaming
+	// derivative rather than the original body. Sizes already describe the
+	// proxy bytes; Encrypted still describes the stream format.
+	Proxy bool `json:"proxy,omitempty"`
 }
 
 func (f LogicalFile) SegmentCount() int {

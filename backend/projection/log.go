@@ -99,6 +99,18 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 		return false, fmt.Errorf("projection: insert replay_log: %w", err)
 	}
 
+	// Sealed remote names resolve here, at the single mutation choke point:
+	// unlocked vaults decrypt the envelope in memory, while a locked vault
+	// projects a unique placeholder and queues the envelope for the
+	// post-unlock sweep. Locally sealed commits already carry plaintext.
+	if queued, err := ResolveOpName(channelID, msgID, &op); err != nil {
+		return false, err
+	} else if queued {
+		if err := queueLockedName(tx, channelID, msgID); err != nil {
+			return false, fmt.Errorf("projection: queue locked name: %w", err)
+		}
+	}
+
 	if err := ApplyOp(tx, channelID, msgID, op, actorID); err != nil {
 		if isSkippableApplyError(err) {
 			slog.Warn("projection: op rejected, continuing replay", "channel_id", channelID, "msg_id", msgID,
